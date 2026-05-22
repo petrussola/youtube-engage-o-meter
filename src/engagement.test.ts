@@ -5,6 +5,7 @@ import {
   calculateEngagement,
   classifyEngagement,
   formatPercent,
+  getEngagementIneligibilityReasons,
   getWarningSeverity,
   getWarningText,
   parseFirstYouTubeCount,
@@ -209,6 +210,31 @@ describe("calculateEngagement", () => {
     assert.equal(calculateEngagement({ likes: 100, comments: 5 }), undefined);
     assert.equal(calculateEngagement({ views: 10_000 }), undefined);
     assert.equal(calculateEngagement({ views: 999, likes: 100 }), undefined);
+  });
+});
+
+describe("getEngagementIneligibilityReasons", () => {
+  it("explains when the view count is missing", () => {
+    assert.deepEqual(getEngagementIneligibilityReasons({ likes: 10 }), [
+      "view count is missing",
+    ]);
+  });
+
+  it("explains when the video is under the minimum view count", () => {
+    assert.deepEqual(
+      getEngagementIneligibilityReasons({
+        views: 100,
+        likes: 2,
+        comments: 0,
+      }),
+      ["view count is below 1,000 minimum"],
+    );
+  });
+
+  it("explains when engagement counts are missing", () => {
+    assert.deepEqual(getEngagementIneligibilityReasons({ views: 10_000 }), [
+      "both like count and comment count are missing",
+    ]);
   });
 });
 

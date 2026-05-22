@@ -1,25 +1,37 @@
 import "./popup.css";
 
-type DebugMessage =
-  | { type: "youtube-engage-o-meter:getDebugDetails" }
-  | { enabled: boolean; type: "youtube-engage-o-meter:setDebugDetails" };
-type DebugResponse = {
+type SettingsMessage =
+  | { type: "youtube-engage-o-meter:getSettings" }
+  | { enabled: boolean; type: "youtube-engage-o-meter:setDebugDetails" }
+  | {
+      enabled: boolean;
+      type: "youtube-engage-o-meter:setShowInformationalBanners";
+    };
+type SettingsResponse = {
   debugDetailsEnabled: boolean;
+  showInformationalBanners: boolean;
 };
 
+const informationalBannersToggle = document.querySelector<HTMLInputElement>(
+  "#informational-banners-toggle",
+);
 const debugToggle = document.querySelector<HTMLInputElement>(
   "#debug-details-toggle",
 );
-const debugStatus =
+const statusMessage =
   document.querySelector<HTMLParagraphElement>("#debug-status");
 
 function setStatus(message: string): void {
-  if (debugStatus) {
-    debugStatus.textContent = message;
+  if (statusMessage) {
+    statusMessage.textContent = message;
   }
 }
 
 function setToggleEnabled(enabled: boolean): void {
+  if (informationalBannersToggle) {
+    informationalBannersToggle.disabled = !enabled;
+  }
+
   if (debugToggle) {
     debugToggle.disabled = !enabled;
   }
@@ -43,7 +55,9 @@ function getActiveTabId(): Promise<number> {
   });
 }
 
-function sendDebugMessage(message: DebugMessage): Promise<DebugResponse> {
+function sendSettingsMessage(
+  message: SettingsMessage,
+): Promise<SettingsResponse> {
   return getActiveTabId().then(
     (tabId) =>
       new Promise((resolve, reject) => {
@@ -57,9 +71,11 @@ function sendDebugMessage(message: DebugMessage): Promise<DebugResponse> {
             !response ||
             typeof response !== "object" ||
             !("debugDetailsEnabled" in response) ||
-            typeof response.debugDetailsEnabled !== "boolean"
+            typeof response.debugDetailsEnabled !== "boolean" ||
+            !("showInformationalBanners" in response) ||
+            typeof response.showInformationalBanners !== "boolean"
           ) {
-            reject(new Error("No debug response received."));
+            reject(new Error("No settings response received."));
             return;
           }
 
@@ -69,31 +85,61 @@ function sendDebugMessage(message: DebugMessage): Promise<DebugResponse> {
   );
 }
 
-async function refreshDebugToggle(): Promise<void> {
+function applySettings(response: SettingsResponse): void {
+  if (informationalBannersToggle) {
+    informationalBannersToggle.checked = response.showInformationalBanners;
+  }
+
+  if (debugToggle) {
+    debugToggle.checked = response.debugDetailsEnabled;
+  }
+}
+
+async function refreshSettings(): Promise<void> {
   setToggleEnabled(false);
   setStatus("Checking current tab...");
 
   try {
-    const response = await sendDebugMessage({
-      type: "youtube-engage-o-meter:getDebugDetails",
+    const response = await sendSettingsMessage({
+      type: "youtube-engage-o-meter:getSettings",
     });
 
-    if (debugToggle) {
-      debugToggle.checked = response.debugDetailsEnabled;
+    applySettings(response);
+    setToggleEnabled(true);
+    setStatus("Settings loaded.");
+  } catch {
+    if (informationalBannersToggle) {
+      informationalBannersToggle.checked = true;
     }
 
-    setToggleEnabled(true);
-    setStatus(
-      response.debugDetailsEnabled
-        ? "Debug details are enabled."
-        : "Debug details are disabled.",
-    );
-  } catch {
     if (debugToggle) {
       debugToggle.checked = false;
     }
 
-    setStatus("Open a YouTube watch page to use debug mode.");
+    setStatus("Open a YouTube watch page to change settings.");
+  }
+}
+
+async function handleInformationalBannersToggleChange(): Promise<void> {
+  if (!informationalBannersToggle) {
+    return;
+  }
+
+  const nextEnabled = informationalBannersToggle.checked;
+  setToggleEnabled(false);
+  setStatus("Saving...");
+
+  try {
+    const response = await sendSettingsMessage({
+      enabled: nextEnabled,
+      type: "youtube-engage-o-meter:setShowInformationalBanners",
+    });
+
+    applySettings(response);
+    setStatus("Settings saved.");
+    setToggleEnabled(true);
+  } catch {
+    await refreshSettings();
   }
 }
 
@@ -107,25 +153,25 @@ async function handleDebugToggleChange(): Promise<void> {
   setStatus("Saving...");
 
   try {
-    const response = await sendDebugMessage({
+    const response = await sendSettingsMessage({
       enabled: nextEnabled,
       type: "youtube-engage-o-meter:setDebugDetails",
     });
 
-    debugToggle.checked = response.debugDetailsEnabled;
-    setStatus(
-      response.debugDetailsEnabled
-        ? "Debug details are enabled."
-        : "Debug details are disabled.",
-    );
+    applySettings(response);
+    setStatus("Settings saved.");
     setToggleEnabled(true);
   } catch {
-    await refreshDebugToggle();
+    await refreshSettings();
   }
 }
+
+informationalBannersToggle?.addEventListener("change", () => {
+  void handleInformationalBannersToggleChange();
+});
 
 debugToggle?.addEventListener("change", () => {
   void handleDebugToggleChange();
 });
 
-void refreshDebugToggle();
+void refreshSettings();

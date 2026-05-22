@@ -50,14 +50,16 @@ p {
   font-size: 12px;
 }
 
-#debug-details-toggle {
+#debug-details-toggle,
+#informational-banners-toggle {
   width: 18px;
   height: 18px;
   flex: 0 0 auto;
   accent-color: #dc2626;
 }
 
-#debug-details-toggle:disabled {
+#debug-details-toggle:disabled,
+#informational-banners-toggle:disabled {
   cursor: not-allowed;
 }
 

@@ -1,7 +1,9 @@
 import {
   calculateEngagement,
+  getEngagementIneligibilityReasons,
   getWarningSeverity,
   getWarningText,
+  MIN_WARNING_AGE_DAYS,
   parseFirstYouTubeCount,
   parseFirstYouTubeCountWithLabel,
   parseYouTubeCount,
@@ -34,6 +36,8 @@ let currentVideoId: string | undefined;
 
 const FORCE_WARNING_STORAGE_KEY = "youtube-engage-o-meter:forceWarning";
 const DEBUG_DETAILS_STORAGE_KEY = "youtube-engage-o-meter:debugDetails";
+const SHOW_INFORMATIONAL_BANNERS_STORAGE_KEY =
+  "youtube-engage-o-meter:showInformationalBanners";
 const METHODOLOGY_URL =
   "https://github.com/petrussola/youtube-engage-o-meter#classification";
 const WATCH_DOM_RETRY_LIMIT = 40;
@@ -59,12 +63,17 @@ type EngagementDebugSources = {
   likes: string[];
   comments: string[];
 };
-type BannerSeverity = WarningSeverity | "passing";
-type PopupDebugMessage =
-  | { type: "youtube-engage-o-meter:getDebugDetails" }
-  | { enabled: boolean; type: "youtube-engage-o-meter:setDebugDetails" };
-type PopupDebugResponse = {
+type BannerSeverity = WarningSeverity | "passing" | "unavailable";
+type PopupSettingsMessage =
+  | { type: "youtube-engage-o-meter:getSettings" }
+  | { enabled: boolean; type: "youtube-engage-o-meter:setDebugDetails" }
+  | {
+      enabled: boolean;
+      type: "youtube-engage-o-meter:setShowInformationalBanners";
+    };
+type PopupSettingsResponse = {
   debugDetailsEnabled: boolean;
+  showInformationalBanners: boolean;
 };
 
 function getElementTextOrLabel(
@@ -175,6 +184,13 @@ function isDebugDetailsEnabled(): boolean {
   return window.localStorage.getItem(DEBUG_DETAILS_STORAGE_KEY) === "true";
 }
 
+function shouldShowInformationalBanners(): boolean {
+  return (
+    window.localStorage.getItem(SHOW_INFORMATIONAL_BANNERS_STORAGE_KEY) !==
+    "false"
+  );
+}
+
 function setDebugDetailsEnabled(enabled: boolean): void {
   if (enabled) {
     window.localStorage.setItem(DEBUG_DETAILS_STORAGE_KEY, "true");
@@ -184,22 +200,36 @@ function setDebugDetailsEnabled(enabled: boolean): void {
   window.localStorage.removeItem(DEBUG_DETAILS_STORAGE_KEY);
 }
 
-function isPopupDebugMessage(message: unknown): message is PopupDebugMessage {
+function setShowInformationalBanners(enabled: boolean): void {
+  if (enabled) {
+    window.localStorage.removeItem(SHOW_INFORMATIONAL_BANNERS_STORAGE_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(SHOW_INFORMATIONAL_BANNERS_STORAGE_KEY, "false");
+}
+
+function isPopupSettingsMessage(
+  message: unknown,
+): message is PopupSettingsMessage {
   if (!message || typeof message !== "object" || !("type" in message)) {
     return false;
   }
 
   const type = message.type;
 
-  if (type === "youtube-engage-o-meter:getDebugDetails") {
+  if (type === "youtube-engage-o-meter:getSettings") {
     return true;
   }
 
-  return (
-    type === "youtube-engage-o-meter:setDebugDetails" &&
-    "enabled" in message &&
-    typeof message.enabled === "boolean"
-  );
+  if (
+    type !== "youtube-engage-o-meter:setDebugDetails" &&
+    type !== "youtube-engage-o-meter:setShowInformationalBanners"
+  ) {
+    return false;
+  }
+
+  return "enabled" in message && typeof message.enabled === "boolean";
 }
 
 function getWatchVideoId(): string | undefined {
@@ -313,11 +343,17 @@ function getDebugText(
         : "(likes + comments) / views";
 
   if (!analysis) {
+    const reasons = getEngagementIneligibilityReasons(metrics);
+    const resultReason =
+      reasons.length > 0
+        ? reasons.join("; ")
+        : "not enough parsed data to calculate engagement";
+
     return [
       "YouTube Engage-o-meter debug",
       `Parsed: views=${formatDebugCount(metrics.views)}, likes=${formatDebugCount(metrics.likes)}, comments=${comments}`,
       sourceDetails,
-      "Result: not enough parsed data to calculate engagement",
+      `Result: no engagement score available; ${resultReason}`,
     ].join("\n");
   }
 
@@ -337,6 +373,10 @@ function getBannerColor(severity: BannerSeverity): string {
     return "#16a34a";
   }
 
+  if (severity === "unavailable") {
+    return "#475569";
+  }
+
   if (severity === "highly-unusual") {
     return "#dc2626";
   }
@@ -349,6 +389,10 @@ function getBannerColor(severity: BannerSeverity): string {
 }
 
 function getBannerTextColor(severity: BannerSeverity): string {
+  if (severity === "unavailable") {
+    return "#ffffff";
+  }
+
   return severity === "low" ? "#431407" : "#ffffff";
 }
 
@@ -363,10 +407,68 @@ function getDebugBannerMessage(
     return getWarningText(analysis);
   }
 
+  if (analysis.ageGateActive) {
+    return `YouTube Engage-o-meter debug · video is too new for normal warnings · Engagement: ${(analysis.engagementRate * 100).toFixed(1)}%`;
+  }
+
   return `YouTube Engage-o-meter debug · engagement passes threshold · Engagement: ${(analysis.engagementRate * 100).toFixed(1)}%`;
 }
 
-function renderWarningBanner(
+function getUnavailableBannerMessage(
+  metrics: VisibleEngagementMetrics,
+): string {
+  const reasons = getEngagementIneligibilityReasons(metrics);
+  const reasonText =
+    reasons.length > 0 ? reasons.join("; ") : "not enough visible data";
+
+  return `No engagement score available · ${reasonText}`;
+}
+
+function getPassingBannerMessage(analysis: EngagementAnalysis): string {
+  return `Engagement looks normal · Engagement: ${(analysis.engagementRate * 100).toFixed(1)}%`;
+}
+
+function getAgeGateBannerMessage(analysis: EngagementAnalysis): string {
+  const ageText =
+    analysis.ageDays === undefined
+      ? "video age is unavailable"
+      : `video is ${analysis.ageDays} days old`;
+
+  return `Engagement warning paused · ${ageText}; normal warnings start after ${MIN_WARNING_AGE_DAYS} days · Engagement: ${(analysis.engagementRate * 100).toFixed(1)}%`;
+}
+
+function shouldRetryUnavailableAnalysis(
+  metrics: VisibleEngagementMetrics,
+): boolean {
+  const reasons = getEngagementIneligibilityReasons(metrics);
+
+  return (
+    reasons.includes("view count is missing") ||
+    reasons.includes("both like count and comment count are missing")
+  );
+}
+
+function getBannerSeverity(
+  analysis: EngagementAnalysis | undefined,
+): BannerSeverity {
+  const warningSeverity = analysis ? getWarningSeverity(analysis) : undefined;
+
+  if (warningSeverity) {
+    return warningSeverity;
+  }
+
+  if (!analysis) {
+    return "unavailable";
+  }
+
+  return analysis.ageGateActive ? "unavailable" : "passing";
+}
+
+function isInformationalSeverity(severity: BannerSeverity): boolean {
+  return severity === "passing" || severity === "unavailable";
+}
+
+function renderEngagementBanner(
   insertionTarget: HTMLElement,
   metrics: VisibleEngagementMetrics,
   debugSources: EngagementDebugSources,
@@ -398,9 +500,13 @@ function renderWarningBanner(
   const warningMessage = document.createElement("span");
   warningMessage.textContent = debugDetails
     ? getDebugBannerMessage(analysis)
-    : analysis
-      ? getWarningText(analysis)
-      : "YouTube Engage-o-meter debug · no engagement score available";
+    : analysis && severity === "unavailable"
+      ? getAgeGateBannerMessage(analysis)
+      : analysis && severity === "passing"
+        ? getPassingBannerMessage(analysis)
+        : analysis
+          ? getWarningText(analysis)
+          : getUnavailableBannerMessage(metrics);
   warningMessage.style.cssText = [
     "display: block",
     "min-width: 0",
@@ -490,21 +596,13 @@ function renderEngagementWarning(videoId: string | undefined): boolean {
 
   const { metrics, debugSources, analysis } = getAnalysisForCurrentPage();
 
-  if (!analysis && !isDebugDetailsEnabled()) {
-    return false;
+  const severity = getBannerSeverity(analysis);
+
+  if (isInformationalSeverity(severity) && !shouldShowInformationalBanners()) {
+    return analysis !== undefined || !shouldRetryUnavailableAnalysis(metrics);
   }
 
-  const severity =
-    (analysis ? getWarningSeverity(analysis) : undefined) ??
-    (isForceWarningEnabled() || isDebugDetailsEnabled()
-      ? "passing"
-      : undefined);
-
-  if (!severity) {
-    return true;
-  }
-
-  renderWarningBanner(
+  renderEngagementBanner(
     insertionTarget,
     metrics,
     debugSources,
@@ -513,7 +611,7 @@ function renderEngagementWarning(videoId: string | undefined): boolean {
   );
   renderPlayerBorder(playerShell, severity);
 
-  return true;
+  return analysis !== undefined || !shouldRetryUnavailableAnalysis(metrics);
 }
 
 function waitForWatchDomAndInject(videoId = currentVideoId, attempt = 1): void {
@@ -533,29 +631,33 @@ function waitForWatchDomAndInject(videoId = currentVideoId, attempt = 1): void {
   );
 }
 
-function watchForceWarningBypass(): void {
+function watchDisplaySettings(): void {
   window.clearInterval(forceWarningInterval);
   let wasForceWarningEnabled = isForceWarningEnabled();
   let wasDebugDetailsEnabled = isDebugDetailsEnabled();
+  let wereInformationalBannersShown = shouldShowInformationalBanners();
 
   forceWarningInterval = window.setInterval(() => {
     const forceWarningEnabled = isForceWarningEnabled();
     const debugDetailsEnabled = isDebugDetailsEnabled();
+    const informationalBannersShown = shouldShowInformationalBanners();
 
     if (
       (forceWarningEnabled && !wasForceWarningEnabled) ||
-      debugDetailsEnabled !== wasDebugDetailsEnabled
+      debugDetailsEnabled !== wasDebugDetailsEnabled ||
+      informationalBannersShown !== wereInformationalBannersShown
     ) {
       waitForWatchDomAndInject();
     }
 
     wasForceWarningEnabled = forceWarningEnabled;
     wasDebugDetailsEnabled = debugDetailsEnabled;
+    wereInformationalBannersShown = informationalBannersShown;
   }, FORCE_WARNING_POLL_DELAY_MS);
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!isPopupDebugMessage(message)) {
+  if (!isPopupSettingsMessage(message)) {
     return false;
   }
 
@@ -564,8 +666,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     waitForWatchDomAndInject();
   }
 
-  const response: PopupDebugResponse = {
+  if (message.type === "youtube-engage-o-meter:setShowInformationalBanners") {
+    setShowInformationalBanners(message.enabled);
+    waitForWatchDomAndInject();
+  }
+
+  const response: PopupSettingsResponse = {
     debugDetailsEnabled: isDebugDetailsEnabled(),
+    showInformationalBanners: shouldShowInformationalBanners(),
   };
 
   sendResponse(response);
@@ -637,7 +745,7 @@ function handleYouTubeRouteChange(): void {
   initializeCurrentWatchPage();
 }
 
-watchForceWarningBypass();
+watchDisplaySettings();
 handleYouTubeRouteChange();
 document.addEventListener("yt-navigate-finish", handleYouTubeRouteChange);
 window.addEventListener("popstate", handleYouTubeRouteChange);

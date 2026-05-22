@@ -33,8 +33,8 @@ export type WarningSeverity = Extract<
   "low" | "suspiciously-low" | "highly-unusual"
 >;
 
-const MIN_ANALYZABLE_VIEWS = 1_000;
-const MIN_WARNING_AGE_DAYS = 3;
+export const MIN_ANALYZABLE_VIEWS = 1_000;
+export const MIN_WARNING_AGE_DAYS = 3;
 
 function getCountMultiplier(suffix: string | undefined): number {
   if (suffix === "k") {
@@ -227,6 +227,26 @@ export function calculateEngagement(
         ? "limited"
         : "standard",
   };
+}
+
+export function getEngagementIneligibilityReasons(
+  metrics: VisibleEngagementMetrics,
+): string[] {
+  const reasons: string[] = [];
+
+  if (metrics.views === undefined) {
+    reasons.push("view count is missing");
+  } else if (metrics.views < MIN_ANALYZABLE_VIEWS) {
+    reasons.push(
+      `view count is below ${MIN_ANALYZABLE_VIEWS.toLocaleString("en-US")} minimum`,
+    );
+  }
+
+  if (metrics.likes === undefined && metrics.comments === undefined) {
+    reasons.push("both like count and comment count are missing");
+  }
+
+  return reasons;
 }
 
 export function getWarningSeverity(
