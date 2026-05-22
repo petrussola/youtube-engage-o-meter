@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from "node:fs";
+import { cpSync, copyFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { defineConfig, type PluginOption } from "vite";
 
@@ -9,6 +9,7 @@ function copyExtensionFiles(): PluginOption {
       const manifestOutputPath = resolve("dist/manifest.json");
       mkdirSync(dirname(manifestOutputPath), { recursive: true });
       copyFileSync(resolve("manifest.json"), manifestOutputPath);
+      cpSync(resolve("icons"), resolve("dist/icons"), { recursive: true });
     },
   };
 }
